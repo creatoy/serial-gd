@@ -3,21 +3,18 @@ use serialport::SerialPort;
 use serialport::SerialPortType;
 
 #[derive(GodotClass)]
-#[class(base=Object)]
+#[class(base=RefCounted)]
 struct Serial {
     port: Option<Box<dyn SerialPort>>,
 
     #[base]
-    base: Base<Object>,
+    base: Base<RefCounted>,
 }
 
 #[godot_api]
-impl ObjectVirtual for Serial {
-    fn init(base: Base<Object>) -> Self {
-        Self {
-            port: None,
-            base
-        }
+impl RefCountedVirtual for Serial {
+    fn init(base: Base<RefCounted>) -> Self {
+        Self { port: None, base }
     }
 }
 
@@ -30,8 +27,9 @@ impl Serial {
     #[func]
     fn list_ports() -> Array<Dictionary> {
         if let Ok(infos) = serialport::available_ports() {
-            infos.into_iter().map(
-                |info| {
+            infos
+                .into_iter()
+                .map(|info| {
                     let mut dict = Dictionary::new();
                     dict.insert("name", info.port_name);
                     if let SerialPortType::UsbPort(usb) = info.port_type {
@@ -43,8 +41,8 @@ impl Serial {
                         dict.insert("product", usb.product.unwrap_or("".to_string()));
                     }
                     dict
-                }
-            ).collect()
+                })
+                .collect()
         } else {
             godot_error!("Failed to list serial ports");
             Array::new()
@@ -58,7 +56,7 @@ impl Serial {
             Ok(port) => {
                 self.port = Some(port);
                 true
-            },
+            }
             Err(e) => {
                 godot_error!("Failed to open serial port: {}", e);
                 false
@@ -66,17 +64,30 @@ impl Serial {
         }
     }
 
+    /// Is serial open or not
+    #[func]
+    fn is_open(&self) -> bool {
+        match self.port {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// Close the serial port
+    #[func]
+    fn close(&mut self) {
+        self.port = None;
+    }
+
     /// Sets the baud rate.
     #[func]
     fn set_baud_rate(&mut self, baud_rate: u32) -> bool {
-        match self.port {
-            Some(ref mut port) => {
-                match port.set_baud_rate(baud_rate) {
-                    Ok(_) => true,
-                    Err(e) => {
-                        godot_error!("Failed to set baud rate: {}", e);
-                        false
-                    }
+        match &mut self.port {
+            Some(port) => match port.set_baud_rate(baud_rate) {
+                Ok(_) => true,
+                Err(e) => {
+                    godot_error!("Failed to set baud rate: {}", e);
+                    false
                 }
             },
             None => {
@@ -87,10 +98,31 @@ impl Serial {
     }
 
     /// Write data to the serial port.
+    ///
+    /// Return n as bytes written, or -1 when failed
     #[func]
     fn write(&mut self, data: PackedByteArray) -> i32 {
         if let Some(port) = &mut self.port {
             match port.write(&data.to_vec()) {
+                Ok(n) => n as i32,
+                Err(e) => {
+                    godot_error!("Failed to write to serial port: {}", e);
+                    -1
+                }
+            }
+        } else {
+            godot_error!("Serial port not open");
+            -1
+        }
+    }
+
+    /// Write string to the serial port
+    ///
+    /// Return n as bytes written, or -1 when failed
+    #[func]
+    fn write_str(&mut self, string: GodotString) -> i32 {
+        if let Some(port) = &mut self.port {
+            match port.write(&string.to_string().as_bytes()) {
                 Ok(n) => n as i32,
                 Err(e) => {
                     godot_error!("Failed to write to serial port: {}", e);
@@ -129,13 +161,39 @@ impl Serial {
             match port.read_exact(&mut buf) {
                 Ok(_) => buf.as_slice().into(),
                 Err(e) => {
-                    godot_error!("Failed to write to serial port: {}", e);
+                    godot_error!("Failed to read from serial port: {}", e);
                     PackedByteArray::new()
                 }
             }
         } else {
             godot_error!("Serial port not open");
             PackedByteArray::new()
+        }
+    }
+
+    /// Read string form the seral port
+    #[func]
+    fn read_str(&mut self, utf8_encoding: bool) -> GodotString {
+        if let Some(port) = &mut self.port {
+            let mut buf = vec![0u8; port.bytes_to_read().unwrap() as usize];
+            match port.read_exact(&mut buf) {
+                Ok(_) => {
+                    if utf8_encoding {
+                        String::from_utf8_lossy(&buf).into()
+                    } else {
+                        unsafe {
+                            String::from_raw_parts(buf.as_mut_ptr(), buf.len(), buf.len()).into()
+                        }
+                    }
+                }
+                Err(e) => {
+                    godot_error!("Failed to read from serial port: {}", e);
+                    GodotString::new()
+                }
+            }
+        } else {
+            godot_error!("Serial port not open");
+            GodotString::new()
         }
     }
 
@@ -206,7 +264,7 @@ impl Serial {
     }
 
     /// Reads the state of the Ring Indicator control signal.
-    /// 
+    ///
     /// This function returns a boolean that indicates whether the RI control signal is asserted.
     #[func]
     fn get_ri(&mut self) -> bool {
@@ -225,7 +283,7 @@ impl Serial {
     }
 
     /// Reads the state of the Carrier Detect control signal.
-    /// 
+    ///
     /// This function returns a boolean that indicates whether the CD control signal is asserted.
     #[func]
     fn get_cd(&mut self) -> bool {

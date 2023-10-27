@@ -1,0 +1,129 @@
+# Action name
+name: Deploy
+
+# 触发条件，这里是新的 tag 被 push 时触发
+on:
+  push:
+    tags:
+      # 正则匹配 tag 格式，如 v0.1.0
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# 实际工作
+jobs:
+  build-and-upload:
+    name: Build and Upload
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      # 配置编译目标平台，这里是在 Ubuntu, MacOS, Windows 上分别编译
+      matrix:
+        include:
+          - name: Linux (GCC)
+            platform: linux
+            arch: x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            features: ""
+
+          - name: MacOS (CLANG)
+            platform: macos
+            arch: x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            features: ""
+        
+          - name: Windows (MSVC)
+            platform: windows
+            arch: x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            features: ""
+    # 执行流程
+    steps:
+      # 克隆仓库代码
+      - name: Clone repository
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+
+      # 获取发布版本号
+      - name: Get the release version from the tag
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_ENV
+
+      # 安装 rust
+      - name: Install rust
+        uses: dtolnay/rust-toolchain@stable
+        # 将上面配置的 target 传入以安装工具链
+        with:
+          targets: ${{ matrix.target }}
+      
+      # 安装依赖库
+      - name: Install dependencies
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "linux" ]; then
+            set -eux
+            sudo apt-get update -qq
+            sudo apt-get install -y libudev-dev
+            sudo apt-get install -qqq tree
+          elif [ "${{ matrix.platform }}" = "macos" ]; then
+            brew install tree
+          fi
+    
+      # 构建二进制文件
+      - name: Build binary files
+        uses: actions-rs/cargo@v1
+        with:
+          # use-cross: true
+          command: build
+          args: --verbose --release --target ${{ matrix.target }}
+
+      # 打包上传二进制文件
+      - name: Archive files
+        shell: bash
+        run: |
+          bin_name="serial"
+          bin_dir="addons/$bin_name/bin"
+          
+          mkdir -p "$bin_dir"
+
+          if [ "${{ matrix.platform }}" = "linux" ]; then
+            bin_file="lib$bin_name.${{ matrix.platform }}.${{ matrix.arch }}.so"
+            mv target/${{ matrix.target }}/release/lib$bin_name.so $bin_dir/$bin_file
+          elif [ "${{ matrix.platform }}" = "macos" ]; then
+            bin_file="lib$bin_name.${{ matrix.platform }}.${{ matrix.arch }}.dylib"
+            mv target/${{ matrix.target }}/release/lib$bin_name.dylib $bin_dir/$bin_file
+          else
+            bin_file="$bin_name.${{ matrix.platform }}.${{ matrix.arch }}.dll"
+            mv target/${{ matrix.target }}/release/$bin_name.dll $bin_dir/$bin_file
+          fi
+
+          cat>$bin_dir/../$bin_name.gdextension<<EOF
+          [configuration]
+          entry_symbol = "${bin_name}_lib_init"
+          compatibility_minimum = 4.1
+          [libraries]
+          ${{ matrix.platform }}.${{ matrix.arch }} = "bin/$bin_file"
+          EOF
+
+          archive_name="$bin_name-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}"
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            7z a "$archive_name.zip" "addons"
+            echo "ASSET=$archive_name.zip" >> $GITHUB_ENV
+          else
+            tree addons
+            tar -czvf "$archive_name.tar.gz" "addons"
+            echo "ASSET=$archive_name.tar.gz" >> $GITHUB_ENV
+          fi
+
+      - name: Release files
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            ${{ env.ASSET }}
