@@ -70,7 +70,7 @@ jobs:
           if [ "${{ matrix.platform }}" = "linux" ]; then
             set -eux
             sudo apt-get update -qq
-            sudo apt-get install -y libudev-dev
+            sudo apt-get install -qqq libudev-dev
             sudo apt-get install -qqq tree
           elif [ "${{ matrix.platform }}" = "macos" ]; then
             brew install tree
@@ -88,8 +88,9 @@ jobs:
       - name: Archive files
         shell: bash
         run: |
-          bin_name="serial"
-          bin_dir="addons/$bin_name/bin"
+          addon_name="serial"
+          bin_dir="addons/$addon_name/bin"
+          bin_name="${addon_name}_ext"
           
           mkdir -p "$bin_dir"
 
@@ -99,20 +100,22 @@ jobs:
           elif [ "${{ matrix.platform }}" = "macos" ]; then
             bin_file="lib$bin_name.${{ matrix.platform }}.${{ matrix.arch }}.dylib"
             mv target/${{ matrix.target }}/release/lib$bin_name.dylib $bin_dir/$bin_file
-          else
+          elif [ "${{ matrix.platform }}" = "windows" ]; then
             bin_file="$bin_name.${{ matrix.platform }}.${{ matrix.arch }}.dll"
             mv target/${{ matrix.target }}/release/$bin_name.dll $bin_dir/$bin_file
+          else
+            echo "Unsupported platform: ${{ matrix.platform }}"
           fi
 
-          cat>$bin_dir/../$bin_name.gdextension<<EOF
+          cat>$bin_dir/../$addon_name.gdextension<<EOF
           [configuration]
-          entry_symbol = "${bin_name}_lib_init"
+          entry_symbol = "${addon_name}_ext_init"
           compatibility_minimum = 4.1
           [libraries]
           ${{ matrix.platform }}.${{ matrix.arch }} = "bin/$bin_file"
           EOF
 
-          archive_name="$bin_name-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}"
+          archive_name="$addon_name-${{ env.VERSION }}-${{ matrix.platform }}-${{ matrix.arch }}"
           if [ "${{ matrix.platform }}" = "windows" ]; then
             7z a "$archive_name.zip" "addons"
             echo "ASSET=$archive_name.zip" >> $GITHUB_ENV

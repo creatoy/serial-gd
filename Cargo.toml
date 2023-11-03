@@ -5,10 +5,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+name = "serial_ext"
+crate-type = ["cdylib"]
+
 [dependencies]
 serialport = "4.2.1"
 godot = { git = "https://github.com/godot-rust/gdext", branch = "master" }
-
-
-[lib]
-crate-type = ["cdylib"]
